@@ -3,10 +3,10 @@ TEST_TARGET=	bin/dlharness
 LIBS=		-lnsl -lpthread -ltac
 TEST_LIBS=	-ldl
 
-CC=	gcc
-CFLAGS=	-D_FORTIFY_SOURCE=2 -fstack-protector -std=gnu99 -Werror -Wall \
-	-ggdb -fPIC -I/usr/local/lib
-LDFLAGS=-shared -Wl,-soname,libnss_tacplus.so.2 -Wl,-rpath=/usr/local/lib
+CC = gcc
+CFLAGS =  -D_FORTIFY_SOURCE=2 -fstack-protector -std=gnu99 -Werror -Wall
+CFLAGS += -ggdb -fPIC
+LDFLAGS = -shared -Wl,-soname,libnss_tacplus.so.2
 
 
 OBJECTS=$(patsubst %.c, %.o, $(wildcard src/*.c))
@@ -28,6 +28,9 @@ test: $(TEST_TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(OBJECTS) $(LIBS) $(LDFLAGS) -o $@
+
+install:
+	install -D $(TARGET) $(DESTDIR)/lib/x86_64-linux-gnu/$(TARGET) 
 
 $(TEST_TARGET): $(TEST_OBJECTS)
 	-mkdir -p bin

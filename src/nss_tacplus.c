@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <grp.h>
 
 #include <assert.h>
 #include <ctype.h>
@@ -23,7 +24,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TACPLUS_CONF_FILE "/etc/tacplus.conf"
+#define TACPLUS_CONF_FILE "/etc/nss_tacplus.conf"
 #define CONFIG_BUFSZ 1024
 
 static pthread_once_t G_tacplus_initialized = PTHREAD_ONCE_INIT;
@@ -333,7 +334,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
     }
 
     fclose(fp);
-    return NSS_STATUS_SUCCESS;
+    return status;
 }
 
 static void _check_config(int cycle)
@@ -420,19 +421,35 @@ static void _normalize_name(const char *name, size_t namelen,
     obuf[i] = '\0';
 }
 
-static const char TAC_ATTR_UID[] = "UID";
-static const char TAC_ATTR_GID[] = "GID";
-static const char TAC_ATTR_HOME[] = "HOME";
+static const char TAC_ATTR_UID[]   = "UID";
+static const char TAC_ATTR_ROLE[]  = "ROLE"; // (admin, operator, ro)
+static const char TAC_ATTR_HOME[]  = "HOME";
 static const char TAC_ATTR_SHELL[] = "SHELL";
 
+#define TAC_DEFAULT_HOME  "/"
+#define TAC_DEFAULT_SHELL "/bin/bash"
+#define TAC_RO_SHELL      "/opt/IPI/ZebOS/bin/imish"
+
+typedef struct
+{
+    char* role;
+    char* groupName;
+} tacRoleGroupName;
+
+static tacRoleGroupName TAC_ROLES[] =
+{
+    { "ADMIN",    "px_admin" },
+    { "OPERATOR", "px_operator" },
+    { "RO",       "px_ro" }
+};
+#define NUM_ROLES (sizeof(TAC_ROLES) / sizeof(tacRoleGroupName))
+
 static const char *REQUIRED_TAC_ATTRS[] =
-    {
-        TAC_ATTR_UID,
-        TAC_ATTR_GID,
-        TAC_ATTR_HOME,
-        TAC_ATTR_SHELL,
-        NULL
-    };
+{
+    TAC_ATTR_UID,
+    TAC_ATTR_ROLE,
+    NULL
+};
 #define REQUIRED_TAC_ATTRS_LEN (sizeof(REQUIRED_TAC_ATTRS) / sizeof(char*))
 
 /**
@@ -442,28 +459,32 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                               struct passwd *pw, char *buffer, size_t buflen,
                               int *errnop)
 {
-    struct tac_attrib *attr = NULL;
-    enum nss_status status = NSS_STATUS_SUCCESS;
-    char *offset = buffer;
-    const char *attr_good[REQUIRED_TAC_ATTRS_LEN] = { 0 };
-    ptrdiff_t bufleft = buflen - (offset - buffer);
-
-#define mark_attr_good(attrptr)                          \
+    struct tac_attrib* attr = NULL;
+    enum nss_status    status = NSS_STATUS_SUCCESS;
+    char*              offset = buffer;
+    const char*        attr_found[REQUIRED_TAC_ATTRS_LEN] = { 0 };
+    int                shell_opt_found = 0;
+    int                role_is_ro = 0;
+    ptrdiff_t          bufleft = buflen - (offset - buffer);
+    struct group*      group;
+    int                role;
+    
+#define mark_attr_found(attrptr)                         \
     for (size_t i = 0; i < REQUIRED_TAC_ATTRS_LEN; ++i)  \
     {                                                    \
-        if ((attrptr) == attr_good[i])                   \
+        if ((attrptr) == attr_found[i])                  \
         {                                                \
             break;                                       \
         }                                                \
-        else if (NULL == attr_good[i])                   \
+        else if (NULL == attr_found[i])                  \
         {                                                \
-            attr_good[i] = (attrptr);                    \
+            attr_found[i] = (attrptr);                   \
             break;                                       \
         }                                                \
     }
 
     // nullify the attr_good variable
-    memset(attr_good, 0, sizeof(attr_good));
+    memset(attr_found, 0, sizeof(attr_found));
 
     // let's clear out the buffer -- this will simplify code below
     memset(buffer, '\0', buflen);
@@ -484,6 +505,10 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
 
     // password is always notset, so use a constant
     pw->pw_passwd = (char*)NO_PASSWD;
+
+    // set optional attributes
+    pw->pw_dir   = TAC_DEFAULT_HOME;
+    pw->pw_shell = TAC_DEFAULT_SHELL;
 
     attr = reply->attr;
     while (NULL != attr && NSS_STATUS_SUCCESS == status)
@@ -511,7 +536,7 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                 if (0 == _safe_convert_ulong(value , &ulval))
                 {
                     pw->pw_uid = ulval;
-                    mark_attr_good(TAC_ATTR_UID);
+                    mark_attr_found(TAC_ATTR_UID);
                 }
                 else
                 {
@@ -519,19 +544,32 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                     status = NSS_STATUS_TRYAGAIN;
                 }
             }
-            if (0 == strcmp(tmp, TAC_ATTR_GID))
+            if (0 == strcmp(tmp, TAC_ATTR_ROLE))
             {
-                unsigned long ulval;
-                if (0 == _safe_convert_ulong(value, &ulval))
+                // find GID that matches ROLE
+                for (role = 0; role < NUM_ROLES; role++)
                 {
-                    pw->pw_gid = ulval;
-                    mark_attr_good(TAC_ATTR_GID);
-                }
-                else
-                {
-                    *errnop = errno;
-                    status = NSS_STATUS_TRYAGAIN;
-                }
+                    if (strcasecmp(value, TAC_ROLES[role].role) == 0)
+                    {
+                        
+                        // getgrnam(name)
+                        if ((group = getgrnam(TAC_ROLES[role].groupName)) != NULL)
+                        {
+                            // found matching role
+                            pw->pw_gid = group->gr_gid;
+                            mark_attr_found(TAC_ATTR_ROLE);
+                            if (strcmp(TAC_ROLES[role].role, "RO") == 0)
+                            {
+                                role_is_ro = 1;
+                            }
+                            break;
+                        }
+                        else
+                        {
+                            syslog(LOG_WARNING, "%s: group %s not found", __FILE__, TAC_ROLES[role].groupName);
+                        }
+                    }
+                }                        
             }
             if (0 == strcmp(tmp, TAC_ATTR_HOME))
             {
@@ -546,7 +584,6 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                     *offset++ = *value++;
                 }
                 bufleft = buflen - (++offset - buffer);
-                mark_attr_good(TAC_ATTR_HOME);
             }
             if (0 == strcmp(tmp, TAC_ATTR_SHELL))
             {
@@ -561,7 +598,7 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                     *offset++ = *value++;
                 }
                 bufleft = buflen - (++offset - buffer);
-                mark_attr_good(TAC_ATTR_SHELL);
+                shell_opt_found = 1;
             }
         }
         else
@@ -579,9 +616,9 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
         const char *cur = REQUIRED_TAC_ATTRS[o];
         bool seen = false;
 
-        for (size_t i = 0; NULL != attr_good[i]; ++i)
+        for (size_t i = 0; NULL != attr_found[i]; ++i)
         {
-            if (cur == attr_good[i])
+            if (cur == attr_found[i])
             {
                 seen = true;
                 break;
@@ -596,6 +633,12 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
         }
     }
 
+    // if no shell opt and role is RO set shell to RO shell
+    if (!shell_opt_found && role_is_ro)
+    {
+        pw->pw_shell = TAC_RO_SHELL;
+    }
+    
     return status;
 
 buffer_full:
@@ -671,7 +714,7 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
 
         // connect to the current server
         errno = 0;
-        tac_fd = tac_connect_single(server, G_tacplus_conf.secret, NULL);
+        tac_fd = tac_connect_single(server, G_tacplus_conf.secret, NULL, G_tacplus_conf.timeout);
 
         if (0 > tac_fd)
         {

@@ -1,0 +1,5 @@
+nss-tacplus (1.0-plexxi1) unstable; urgency=low
+
+  * Initial release, modified from GitHub source for Plexxi. 
+
+ -- Matthew Morgan <matt.morgan@plexxi.com>  Thu, 23 Jun 2016 19:55:37 -0400

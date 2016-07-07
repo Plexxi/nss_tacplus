@@ -1,0 +1,13 @@
+Source: nss-tacplus
+Priority: optional
+Maintainer: Matthew Morgan <matt.morgan@plexxi.com>
+Build-Depends: debhelper (>= 9), libtac-dev
+Standards-Version: 3.9.5
+Section: libs
+Homepage: https://github.com/benschumacher/nss_tacplus
+
+Package: nss-tacplus1
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libtac2, nscd
+Description: TACACS+ module for NSS
+ Provides an NSS module to support TACACS+
