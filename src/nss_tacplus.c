@@ -43,7 +43,7 @@ static struct tacplus_conf_st
 
     char *secret;
     uint32_t timeout;
-    uint8_t debug_level;
+    uint8_t debug;
     char *service;
     char *protocol;
 } G_tacplus_conf;
@@ -51,7 +51,7 @@ static struct tacplus_conf_st
 static const char CONFKEY_SERVER[]   = "server";
 static const char CONFKEY_SECRET[]   = "secret";
 static const char CONFKEY_TIMEOUT[]  = "timeout";
-static const char CONFKEY_DEBUGLVL[] = "debug-level";
+static const char CONFKEY_DEBUG[]    = "debug";
 static const char CONFKEY_SERVICE[]  = "service";
 static const char CONFKEY_PROTOCOL[] = "protocol";
 
@@ -83,9 +83,10 @@ static int8_t _safe_convert_ulong(const char *str, unsigned long *out)
         int errnum = errno;
 
         strerror_r(errnum, errtext, sizeof(errtext));
-        syslog(LOG_ERR, "%s: strtoul got error: errno=%d, errtext=`%s'",
-               __FILE__, errnum, errtext);
-
+        if (G_tacplus_conf.debug)
+        {
+            syslog(LOG_ERR, "nss_tacplus: strtoul got error: errno=%d, errtext=`%s'", errnum, errtext);
+        }
         result = -1;
     }
 
@@ -108,7 +109,7 @@ static int8_t _safe_convert_ulong(const char *str, unsigned long *out)
  *   timeout <seconds>            (used by all servers)
  *   service <TACACS+ service>    (defaults to linuxlogin)
  *   protocol <TACACS+ protocol>  (defaults to ssh)
- *   debug-level <int>            (currently unused)
+ *   debug                        (enable debug)
  *
  * \param[in] buffer a buffer than can be used to store string values
  * \param[in] buflen the length of the `buffer'
@@ -134,8 +135,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         int errnum = errno;
 
         strerror_r(errnum, errtext, sizeof(errtext));
-        syslog(LOG_ERR, "%s: fopen got error: errno=%d, errtext=`%s'",
-               __FILE__, errnum, errtext);
+        syslog(LOG_ERR, "nss_tacplus: could not open config file %s", TACPLUS_CONF_FILE);
 
         errno = errnum;
         return NSS_STATUS_UNAVAIL;
@@ -157,6 +157,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         char *val = NULL;
         char *endval = NULL;
         size_t len = 0;
+        char* temp;
 
         // ignore empty lines and comments
         if ('#' == *fbuf || '\n' == *fbuf)
@@ -174,7 +175,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         }
 
         // keyword with no value? silently ignore
-        if ('\0' == *val)
+        if ('#' == *val || '\0' == *val)
         {
             continue;
         }
@@ -195,6 +196,29 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         }
         val[++len] = '\0';
         endval = (val + len);
+
+        // if val start with quote then find endquote
+        if (*val == '"')
+        {
+            val++;
+            if ((temp = strchr(val, '"')) == NULL)
+                continue;
+            *temp = 0;
+            endval = temp;
+        }
+        else
+        {
+            if ((temp = strchr(val, '#')) != NULL)
+            {
+                *temp = 0;
+                endval = temp;
+            }
+            if ((temp = strchr(val, ' ')) != NULL)
+            {
+                *temp = 0;
+                endval = temp;
+            }
+        }
 
         if (0 == strncmp(key, CONFKEY_SERVER, sizeof(CONFKEY_SERVER)))
         {
@@ -280,18 +304,13 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
                 tac_timeout = G_tacplus_conf.timeout;
             }
         }
-        else if (0 == strncmp(key, CONFKEY_DEBUGLVL,
-                              sizeof(CONFKEY_DEBUGLVL)))
+        else if (0 == strncmp(key, CONFKEY_DEBUG,
+                              sizeof(CONFKEY_DEBUG)))
         {
-            unsigned long ulval;
-            if (0 == _safe_convert_ulong(val , &ulval))
-            {
-                // we *only* have 255 levels of debug, so let's not
-                // overflow our uint8_t.
-                G_tacplus_conf.debug_level = (255 > ulval ? ulval : 255);
-                // this probably doesn't do anything useful
-                tac_debug_enable = G_tacplus_conf.debug_level;
-            }
+            // debug is 1 for enable and 0 for disable
+            G_tacplus_conf.debug = 1;
+            // this probably doesn't do anything useful
+            tac_debug_enable = G_tacplus_conf.debug;
         }
         else if (0 == strncmp(key, CONFKEY_SERVICE, sizeof(CONFKEY_SERVICE)))
         {
@@ -328,8 +347,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
         }
         else
         {
-            syslog(LOG_WARNING, "%s: unknown configuration key=`%s'",
-                   __FILE__, key);
+            syslog(LOG_WARNING, "nss_tacplus: unknown configuration key=`%s'", key);
         }
     }
 
@@ -348,14 +366,17 @@ static void _check_config(int cycle)
         // short-circuit if we can't stat the configuration file
         // or if the modification time hasn't changed
         // NOTE: we'll also reread if mtime moves backwards
-        syslog(LOG_DEBUG, "%s: `%s' no change at cycle=%d",
-               __FILE__, TACPLUS_CONF_FILE, cycle);
+        if (G_tacplus_conf.debug)
+        {
+            syslog(LOG_DEBUG, "nss_tacplus: `%s' no change at cycle=%d", TACPLUS_CONF_FILE, cycle);
+        }
         return;
     }
 
-    syslog(LOG_INFO, "%s: `%s' detected configuration change at cycle=%d",
-           __FILE__, TACPLUS_CONF_FILE, cycle);
-
+    if (G_tacplus_conf.debug)
+    {
+        syslog(LOG_INFO, "nss_tacplus: `%s' detected configuration change at cycle=%d", TACPLUS_CONF_FILE, cycle);
+    }
     // reload our configuration!
 }
 
@@ -372,11 +393,14 @@ static void _initalize_tacplus(void)
 
     G_tacplus_started = time(NULL);
 
-    syslog(LOG_DEBUG, "%s: started, uid=(%u:%u), gid=(%u:%u)", __FILE__,
-           getuid(), geteuid(), getgid(), getegid());
 
     status = _parse_config(G_tacplus_confbuf, sizeof(G_tacplus_confbuf));
 
+    if (G_tacplus_conf.debug)
+    {
+        syslog(LOG_DEBUG, "nss_tacplus: started, uid=(%u:%u), gid=(%u:%u)",
+               getuid(), geteuid(), getgid(), getegid());
+    }
     conf->status = status;
     conf->errnum = errno;
 }
@@ -428,7 +452,7 @@ static const char TAC_ATTR_SHELL[] = "SHELL";
 
 #define TAC_DEFAULT_HOME  "/"
 #define TAC_DEFAULT_SHELL "/bin/bash"
-#define TAC_RO_SHELL      "/opt/IPI/ZebOS/bin/imish"
+#define TAC_VIEWER_SHELL  "/bin/imish"
 
 typedef struct
 {
@@ -438,9 +462,9 @@ typedef struct
 
 static tacRoleGroupName TAC_ROLES[] =
 {
-    { "ADMIN",    "px_admin" },
-    { "OPERATOR", "px_operator" },
-    { "RO",       "px_ro" }
+    { "ADMINISTRATOR", "px_administrator" },
+    { "OPERATOR",      "px_operator"      },
+    { "VIEWER",        "px_viewer"        }
 };
 #define NUM_ROLES (sizeof(TAC_ROLES) / sizeof(tacRoleGroupName))
 
@@ -464,7 +488,7 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
     char*              offset = buffer;
     const char*        attr_found[REQUIRED_TAC_ATTRS_LEN] = { 0 };
     int                shell_opt_found = 0;
-    int                role_is_ro = 0;
+    int                role_is_viewer = 0;
     ptrdiff_t          bufleft = buflen - (offset - buffer);
     struct group*      group;
     int                role;
@@ -558,15 +582,15 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
                             // found matching role
                             pw->pw_gid = group->gr_gid;
                             mark_attr_found(TAC_ATTR_ROLE);
-                            if (strcmp(TAC_ROLES[role].role, "RO") == 0)
+                            if (strcmp(TAC_ROLES[role].role, "VIEWER") == 0)
                             {
-                                role_is_ro = 1;
+                                role_is_viewer = 1;
                             }
                             break;
                         }
                         else
                         {
-                            syslog(LOG_WARNING, "%s: group %s not found", __FILE__, TAC_ROLES[role].groupName);
+                            syslog(LOG_WARNING, "nss_tacplus: group %s not found", TAC_ROLES[role].groupName);
                         }
                     }
                 }                        
@@ -603,9 +627,12 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
         }
         else
         {
-            syslog(LOG_WARNING,
-                   "%s: invalid attribute `%s', no separator",
-                   __FILE__, attr->attr);
+            if (G_tacplus_conf.debug)
+            {
+                syslog(LOG_WARNING,
+                       "nss_tacplus: invalid attribute `%s', no separator",
+                       attr->attr);
+            }
         }
 
         attr = attr->next;
@@ -627,16 +654,15 @@ static int _passwd_from_reply(const struct areply *reply, const char *name,
 
         if (!seen)
         {
-            syslog(LOG_WARNING, "%s: missing required attribute '%s'",
-                   __FILE__, cur);
+            syslog(LOG_WARNING, "nss_tacplus: missing required attribute '%s'", cur);
             status = NSS_STATUS_NOTFOUND;
         }
     }
 
-    // if no shell opt and role is RO set shell to RO shell
-    if (!shell_opt_found && role_is_ro)
+    // if no shell opt and role is VIEWER set shell to VIEWER shell
+    if (!shell_opt_found && role_is_viewer)
     {
-        pw->pw_shell = TAC_RO_SHELL;
+        pw->pw_shell = TAC_VIEWER_SHELL;
     }
     
     return status;
@@ -709,9 +735,12 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
                     : (void*)&((struct sockaddr_in *)server->ai_addr)->sin_addr);
         inet_ntop(server->ai_family, sin_addr, buffer, buflen);
 
-        syslog(LOG_INFO, "%s: begin lookup: user=`%s', server=`%s:%d'",
-               __FILE__, name, buffer, port);
-
+        if (G_tacplus_conf.debug)
+        {
+            syslog(LOG_INFO, "nss_tacplus: begin lookup: user=`%s', server=`%s:%d'",
+                   name, buffer, port);
+        }
+        
         // connect to the current server
         errno = 0;
         tac_fd = tac_connect_single(server, G_tacplus_conf.secret, NULL, G_tacplus_conf.timeout);
@@ -723,9 +752,9 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
 
             strerror_r(errnum, errtext, sizeof(errtext));
             syslog(LOG_WARNING,
-                   "%s: Connection to TACACS+ server failed: server=`%s:%d', "
+                   "nss_tacplus: Connection to TACACS+ server failed: server=`%s:%d', "
                    "errno=%d, errtext=`%s'",
-                   __FILE__, buffer, port, errnum, errtext);
+                   buffer, port, errnum, errtext);
 
              // upon failure, simply move on to the next server in the list
             continue;
@@ -757,20 +786,26 @@ enum nss_status _nss_tacplus_getpwnam_r(const char *name, struct passwd *pw,
                 if (   (AUTHOR_STATUS_PASS_ADD == reply.status)
                     || (AUTHOR_STATUS_PASS_REPL == reply.status))
                 {
-                    syslog(LOG_INFO,
-                           "%s: found match: user=`%s', server=`%s:%d', "
-                           "status=%d, attributes? %s",
-                           __FILE__, name, buffer, port, reply.status,
-                           (NULL == reply.attr ? "no" : "yes"));
+                    if (G_tacplus_conf.debug)
+                    {
+                        syslog(LOG_INFO,
+                               "nss_tacplus: found match: user=`%s', server=`%s:%d', "
+                               "status=%d, attributes? %s",
+                               name, buffer, port, reply.status,
+                               (NULL == reply.attr ? "no" : "yes"));
+                    }
                     status = _passwd_from_reply(&reply, name, pw, buffer,
                                                 buflen, errnop);
                 }
                 else
                 {
-                    syslog(LOG_INFO,
-                           "%s: lookup failed: user=`%s', server=`%s:%d', "
-                           "status=%d, msg=%s", __FILE__, name, buffer, port,
-                           reply.status, reply.msg);
+                    if (G_tacplus_conf.debug)
+                    {
+                        syslog(LOG_INFO,
+                               "nss_tacplus: lookup failed: user=`%s', server=`%s:%d', "
+                               "status=%d, msg=%s", name, buffer, port,
+                               reply.status, reply.msg);
+                    }
                 }
                 if (NULL != reply.attr)
                 {

@@ -3,3 +3,7 @@ if [ "$1" = "configure" ]; then
 	ldconfig
 fi
 # End automatically added section
+
+addgroup --quiet --system px_administrator
+addgroup --quiet --system px_operator
+addgroup --quiet --system px_viewer
