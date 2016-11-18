@@ -452,7 +452,7 @@ static const char TAC_ATTR_SHELL[] = "SHELL";
 
 #define TAC_DEFAULT_HOME  "/"
 #define TAC_DEFAULT_SHELL "/bin/bash"
-#define TAC_VIEWER_SHELL  "/bin/imish"
+#define TAC_VIEWER_SHELL  "/bin/px-shell"
 
 typedef struct
 {

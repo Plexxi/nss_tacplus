@@ -1,3 +1,9 @@
+nss-tacplus (1.0-plexxi1.1) UNRELEASED; urgency=medium
+
+  * /bin/imish --> /bin/px-shell
+
+ -- Joe Lorenz <joe.lorenz@plexxi.com>  Fri, 18 Nov 2016 14:49:06 -0500
+
 nss-tacplus (1.0-plexxi1) unstable; urgency=low
 
   * Initial release, modified from GitHub source for Plexxi. 
