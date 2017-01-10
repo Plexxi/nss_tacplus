@@ -222,7 +222,6 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
 
         if (0 == strncmp(key, CONFKEY_SERVER, sizeof(CONFKEY_SERVER)))
         {
-            int rv = -1;
             char *srv = val;
             struct addrinfo hints;
 
@@ -251,8 +250,7 @@ static enum nss_status _parse_config(char *buffer, size_t buflen)
 
                 *srv = '\0';
 
-                if (0 == (rv == getaddrinfo(val, port ? port : "49", &hints,
-                                            &servers)))
+                if (0 == getaddrinfo(val, port ? port : "49", &hints, &servers))
                 {
                     assert(NULL != servers);
 
