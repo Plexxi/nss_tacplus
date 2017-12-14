@@ -1,8 +1,14 @@
-nss-tacplus (1.0-plexxi2) UNRELEASED; urgency=medium
+nss-tacplus (1.0-plexxi3) unstable; urgency=medium
+
+  * fix postinst and postrm scripts 
+
+ -- Matthew Morgan <matt.morgan@plexxi.com>  Tue, 26 Sep 2017 11:14:20 -0400
+
+nss-tacplus (1.0-plexxi2) unstable; urgency=medium
 
   * Fix a case where a bad server name would cause an assert. 
 
- -- Matthew Morgan <matt.morgan@plexxi.com>  Tue, 10 Jan 2017 13:19:14 -0500
+ -- Matthew Morgan <matt.morgan@plexxi.com>  Fri, 22 Sep 2017 14:56:23 -0400
 
 nss-tacplus (1.0-plexxi1) unstable; urgency=low
 
